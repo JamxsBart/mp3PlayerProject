@@ -1,30 +1,26 @@
 # ESP32 MP3 Player
 
-A simple SD-card-based MP3/WAV player built with an ESP32, TFT display, I2S audio output, and a rotary encoder. The player scans a `/library` directory on the SD card, starts with a random track, displays the current filename, and lets you pause or skip playback with the encoder button.
+A small ESP32 project that plays MP3 and WAV files from an SD card and shows the current track on a TFT display.
 
-## Features
+## What it does
 
-- Plays `.mp3` and `.wav` files from an SD card
-- Automatically scans `/library` at startup
-- Randomly selects the first track
-- Automatically chooses another random track when playback ends
-- TFT display showing the current track and playback state
-- Single-click to pause or resume
-- Double-click to skip to another random track
-- Supports up to 300 tracks
+- Reads audio files from `/library` on the SD card
+- Supports `.mp3` and `.wav`
+- Picks a random track at startup
+- Plays another random track when the current one ends
+- Shows the track name and playback state on the TFT display
+- Uses a rotary encoder button to pause/resume or skip tracks
 
 ## Hardware
 
-- ESP32 development board
-- TFT display supported by [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI)
+- ESP32 board
+- TFT display compatible with `TFT_eSPI`
 - MicroSD card module
-- I2S DAC, amplifier, or audio module
+- I2S audio output module or DAC
 - Rotary encoder with push button
-- Speaker or headphones connected to the audio output
+- Speaker or headphones
 
-## Pin Configuration
-
-The current sketch uses these pins:
+## Pin setup
 
 | Function | GPIO |
 | --- | ---: |
@@ -39,11 +35,11 @@ The current sketch uses these pins:
 | Encoder DT | 33 |
 | Encoder button | 21 |
 
-> Confirm the pinout for your specific ESP32 board and modules before wiring. The TFT display pins are configured separately through `TFT_eSPI`.
+> Double-check these pins against your board and modules before wiring.
 
-## SD Card Layout
+## SD card layout
 
-Format the card as a compatible FAT filesystem and create a directory named `library` in its root:
+Format the SD card as FAT and create a `library` folder at the root:
 
 ```text
 SD card/
@@ -53,68 +49,51 @@ SD card/
     └── another-song.mp3
 ```
 
-Only files with `.mp3` and `.wav` extensions are loaded. Extension matching is case-insensitive.
+Only files ending in `.mp3` or `.wav` are used.
 
-## Software Setup
+## Software
 
-1. Install the Arduino IDE or another ESP32-compatible development environment.
-2. Install/configure the ESP32 board support package.
-3. Install the required libraries:
+1. Install Arduino IDE or another ESP32-compatible environment.
+2. Add ESP32 board support.
+3. Install these libraries:
    - `TFT_eSPI`
-   - `Audio_nopsram` (the audio library providing the `Audio` class used by the sketch)
+   - `Audio_nopsram`
    - `SD`
    - `SPI`
-4. Configure `TFT_eSPI` for your display and wiring.
+4. Configure `TFT_eSPI` for your display.
 5. Open `src/mp3PlayerMain.ino`.
-6. Select the correct ESP32 board and serial port.
+6. Select the correct ESP32 board and port.
 7. Upload the sketch.
-8. Insert the prepared SD card and open the serial monitor at **115200 baud** for diagnostic messages.
+8. Insert the SD card and open the serial monitor at `115200`.
 
 ## Controls
 
-| Action | Result |
-| --- | --- |
-| Single press | Pause or resume the current track |
-| Double press | Skip to another random track |
-| Track finishes | Automatically play another random track |
-
-The encoder rotation pins are currently defined for future controls; playback control is handled by the encoder push button.
-
-## Configuration
-
-Hardware pins and player limits are defined near the top of `src/mp3PlayerMain.ino`. Adjust these values for your build:
-
-- SD card SPI pins
-- I2S audio pins
-- Rotary encoder button pin
-- `MAX_TRACKS` — maximum number of tracks, currently `300`
-- `MAX_PATH` — maximum stored path length, currently `96`
-
-The default audio volume is set with `audio.setVolume(15)`.
+- Single press: pause/resume
+- Double press: skip to another random track
+- Track ends: automatically plays another random track
 
 ## Troubleshooting
 
-### `SD card failed to load`
+### SD card failed to load
 
-- Check the SD card wiring and chip-select pin.
-- Confirm the card is formatted correctly.
-- Make sure the SD card module uses compatible logic levels.
-- Verify that GPIO 14, 13, 19, and 27 match your wiring.
+- Check wiring and CS pin
+- Reformat the card
+- Verify GPIO and module compatibility
 
-### `No songs found`
+### No songs found
 
-- Confirm that the directory is named exactly `/library`.
-- Check that the files end in `.mp3` or `.wav`.
-- Ensure the files are directly inside `/library`, rather than in nested folders.
+- Make sure the folder is named `library`
+- Use `.mp3` or `.wav` files
+- Keep files in the root of `/library`
 
 ### No audio output
 
-- Verify the I2S BCLK, LRC/WS, and DOUT connections.
-- Confirm that the selected audio module supports the file format.
-- Check the amplifier, speaker, and power supply.
-- Use the serial monitor to confirm that tracks are being opened.
+- Check I2S wiring
+- Confirm the audio module supports the file type
+- Verify speaker/amplifier power
+- Watch the serial monitor for track loading messages
 
-## Project Structure
+## Project files
 
 ```text
 .
@@ -125,4 +104,4 @@ The default audio volume is set with `audio.setVolume(15)`.
 
 ## License
 
-No license has been specified for this project yet. Add a license if you plan to distribute or reuse the code.
+No license has been added yet.
