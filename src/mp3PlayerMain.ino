@@ -39,10 +39,19 @@ bool lastButtonState = HIGH;
 int clickCount = 0;
 unsigned long firstClickTime = 0;
 
+//volume control code
+int volume = 15;
+int lastClkState;
+unsigned long buttonPressTime = 0;
+bool menuOpen = false;
+bool longPressHandled = false;
+
 void playTrack(int index);
 void showTrackName();
 void skipToRandom();
 bool isAudioFile(const char* name);
+void showMenu();
+void checkEncoder();
 
 void setup() {
   Serial.begin(115200);
@@ -95,6 +104,9 @@ void setup() {
   Serial.println(" songs");
 
   pinMode(ENC_SW, INPUT_PULLUP);
+  pinMode(ENC_CLK, INPUT_PULLUP);
+  pinMode(ENC_DT, INPUT_PULLUP);
+  lastClkState = digitalRead(ENC_CLK);
 
   randomSeed(esp_random());
   if (trackCount > 0) {
@@ -201,6 +213,34 @@ void skipToRandom() {
   playTrack(n);
 }
 
+//simple menu design
+void showMenu() {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setCursor(10, 10);
+  tft.println("MENU");
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.setCursor(10, 60);
+  tft.println("Return to Music");
+}
+
+void checkEncoder() {
+  int clk = digitalRead(ENC_CLK);
+  if (clk != lastClkState && clk == LOW) {
+    if (digitalRead(ENC_DT) != clk) {
+      volume++;
+    } else {
+      volume--;
+    }
+    volume = constrain(volume, 0, 21);
+    audio.setVolume(volume);
+    Serial.print("Volume: ");
+    Serial.println(volume);
+  }
+  lastClkState = clk;
+}
+
 void loop() {
   audio.loop();
 
@@ -209,18 +249,46 @@ void loop() {
     skipToRandom();
   }
 
+  if (!menuOpen) {
+    checkEncoder();
+  }
+
   bool button = digitalRead(ENC_SW);
 
   if (button == LOW && lastButtonState == HIGH) {
+    if (menuOpen) {
+      //short press in menu goes back to music/main home screen
+      menuOpen = false;
+      showTrackName();
+      lastButtonState = button;
+      return;
+    }
+    //single press
+    buttonPressTime = millis();
     if (clickCount == 0) firstClickTime = millis();
     clickCount++;
     Serial.print("Click: ");
     Serial.println(clickCount);
   }
+
+  //long press detection 1 second
+  if (button == LOW && !longPressHandled && (millis() - buttonPressTime > 1000)) {
+    longPressHandled = true;
+    menuOpen = true;
+    showMenu();
+    clickCount = 0;
+  }
+
+  if (button == HIGH && lastButtonState == LOW) {
+    if (longPressHandled) {
+      longPressHandled = false;
+    }
+  }
+
   lastButtonState = button;
 
   //once 400ms has passed with no new clicks
-  if (clickCount > 0 && (millis() - firstClickTime) > 400) {
+  if (!menuOpen && !longPressHandled && clickCount > 0 && (millis() - firstClickTime) > 400) {
     if (clickCount == 1) {
       audio.pauseResume();
       paused = !paused;
