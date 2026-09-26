@@ -1,4 +1,4 @@
-//Simple MP3 Player v1.0
+//Simple MP3 Player v1.1
 //jamxsbart
 
 #include <Arduino.h>
@@ -7,13 +7,18 @@
 #include <SD.h>
 #include "Audio_nopsram.h"
 
+//pins for the SD card reader
 #define SD_SPI_SCK   14
 #define SD_SPI_MOSI  13
 #define SD_SPI_MISO  19
 #define SD_SPI_CS    27
+
+//pins for the 3.5mm audio chip
 #define I2S_BCLK  26
 #define I2S_LRC   25
 #define I2S_DOUT  22
+
+//pins for the r encoder
 #define ENC_CLK  17
 #define ENC_DT   33
 #define ENC_SW   21
@@ -41,7 +46,8 @@ unsigned long firstClickTime = 0;
 
 //volume control code
 int volume = 15;
-int lastClkState;
+volatile int encoderCounter = 0;
+int lastEncoderCounter = 0;
 unsigned long buttonPressTime = 0;
 bool menuOpen = false;
 bool longPressHandled = false;
@@ -52,6 +58,8 @@ void skipToRandom();
 bool isAudioFile(const char* name);
 void showMenu();
 void checkEncoder();
+void drawVolume();
+void IRAM_ATTR encoderISR();
 
 void setup() {
   Serial.begin(115200);
@@ -106,7 +114,13 @@ void setup() {
   pinMode(ENC_SW, INPUT_PULLUP);
   pinMode(ENC_CLK, INPUT_PULLUP);
   pinMode(ENC_DT, INPUT_PULLUP);
-  lastClkState = digitalRead(ENC_CLK);
+
+  // initialise encoder state before enabling interrupts
+  lastEncoderCounter = (digitalRead(ENC_CLK) << 1) | digitalRead(ENC_DT);
+
+  // hardware interrupts on BOTH pins so we never miss a transition
+  attachInterrupt(digitalPinToInterrupt(ENC_CLK), encoderISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENC_DT), encoderISR, CHANGE);
 
   randomSeed(esp_random());
   if (trackCount > 0) {
@@ -200,6 +214,9 @@ void showTrackName() {
   tft.print(currentTrack + 1);
   tft.print(" of ");
   tft.print(trackCount);
+
+  // show volume at the bottom
+  drawVolume();
 }
 
 void skipToRandom() {
@@ -225,20 +242,62 @@ void showMenu() {
   tft.println("Return to Music");
 }
 
-void checkEncoder() {
-  int clk = digitalRead(ENC_CLK);
-  if (clk != lastClkState && clk == LOW) {
-    if (digitalRead(ENC_DT) != clk) {
-      volume++;
-    } else {
-      volume--;
-    }
-    volume = constrain(volume, 0, 21);
-    audio.setVolume(volume);
-    Serial.print("Volume: ");
-    Serial.println(volume);
+//draw volume text at the bottom
+void drawVolume() {
+  //create space at the bottom of the screen
+  tft.fillRect(0, 230, 320, 10, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.setCursor(10, 230);
+  tft.print("Volume: ");
+  tft.print(volume);
+}
+
+//interrupt fires on ANY change of CLK or DT
+void IRAM_ATTR encoderISR() {
+  static uint8_t prevState = 0;
+  uint8_t currState = (digitalRead(ENC_CLK) << 1) | digitalRead(ENC_DT);
+  uint8_t transition = (prevState << 2) | currState;
+
+  //valid quadrature transitions only
+  switch (transition) {
+    case 0b0001: case 0b0111: case 0b1110: case 0b1000:
+      encoderCounter--;
+      break;
+    case 0b0010: case 0b1011: case 0b1101: case 0b0100:
+      encoderCounter++;
+      break;
+    //any other transition is a bounce therefore ignored
   }
-  lastClkState = clk;
+  prevState = currState;
+}
+
+//read the interrupt counter and update volume
+void checkEncoder() {
+  noInterrupts();
+  int current = encoderCounter;
+  interrupts();
+
+  if (current != lastEncoderCounter) {
+    int diff = current - lastEncoderCounter;
+
+    //each physical click = 4 quadrature steps for the encoder
+    int clicks = diff / 4;
+
+    if (clicks != 0) {
+      volume += clicks;
+      volume = constrain(volume, 0, 21);
+      audio.setVolume(volume);
+      Serial.print("Volume: ");
+      Serial.println(volume);
+
+      if (!menuOpen) {
+        drawVolume();
+      }
+      //only consume the whole clicks, keep the remainder for next time
+      lastEncoderCounter += clicks * 4;
+    }
+  }
 }
 
 void loop() {
