@@ -1,5 +1,12 @@
-//Simple MP3 Player v1.1
-//jamxsbart
+/*
+ * ESP32 MP3 Player
+ * Refactored v2
+ *
+ * Hardware configuration is intentionally unchanged from v1:
+ * SD:       SCK 14, MOSI 13, MISO 19, CS 27
+ * I2S:      BCLK 26, LRC 25, DOUT 22
+ * Encoder:  CLK 17, DT 33, SW 21
+ */
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
@@ -7,365 +14,862 @@
 #include <SD.h>
 #include "Audio_nopsram.h"
 
-//pins for the SD card reader
-#define SD_SPI_SCK   14
-#define SD_SPI_MOSI  13
-#define SD_SPI_MISO  19
-#define SD_SPI_CS    27
+// -----------------------------------------------------------------------------
+// Configuration
+// -----------------------------------------------------------------------------
 
-//pins for the 3.5mm audio chip
-#define I2S_BCLK  26
-#define I2S_LRC   25
-#define I2S_DOUT  22
+namespace Config {
+constexpr uint8_t SD_SCK  = 14;
+constexpr uint8_t SD_MOSI = 13;
+constexpr uint8_t SD_MISO = 19;
+constexpr uint8_t SD_CS   = 27;
 
-//pins for the r encoder
-#define ENC_CLK  17
-#define ENC_DT   33
-#define ENC_SW   21
+constexpr uint8_t I2S_BCLK = 26;
+constexpr uint8_t I2S_LRC  = 25;
+constexpr uint8_t I2S_DOUT = 22;
 
-#define MAX_TRACKS 300
-#define MAX_PATH   96
+constexpr uint8_t ENCODER_CLK = 17;
+constexpr uint8_t ENCODER_DT  = 33;
+constexpr uint8_t ENCODER_SW  = 21;
 
-TFT_eSPI tft = TFT_eSPI();
-Audio audio;
-SPIClass SDSPI(HSPI);
+constexpr uint16_t MAX_TRACKS = 300;
+constexpr uint16_t MAX_PATH_LENGTH = 96;
 
-char playlist[MAX_TRACKS][MAX_PATH];
-int trackCount = 0;
-int currentTrack = -1;
-bool paused = false;
+constexpr uint8_t MIN_VOLUME = 0;
+constexpr uint8_t MAX_VOLUME = 21;
+constexpr uint8_t DEFAULT_VOLUME = 15;
 
-volatile bool trackEnded = false;
+constexpr uint32_t SD_FREQUENCY = 8000000;
+constexpr uint32_t CLICK_TIMEOUT_MS = 400;
+constexpr uint32_t LONG_PRESS_MS = 1000;
+constexpr uint32_t EOF_GUARD_MS = 2000;
 
-unsigned long trackStartMs = 0;
+constexpr uint16_t SCREEN_WIDTH = 320;
+constexpr uint16_t SCREEN_HEIGHT = 240;
+}
 
-//button edge detection
-bool lastButtonState = HIGH;
-int clickCount = 0;
-unsigned long firstClickTime = 0;
+// -----------------------------------------------------------------------------
+// Types
+// -----------------------------------------------------------------------------
 
-//volume control code
-int volume = 15;
-volatile int encoderCounter = 0;
-int lastEncoderCounter = 0;
-unsigned long buttonPressTime = 0;
-bool menuOpen = false;
-bool longPressHandled = false;
+enum class PlayerState {
+    Playing,
+    Paused,
+    Menu,
+    Error
+};
 
-void playTrack(int index);
-void showTrackName();
-void skipToRandom();
-bool isAudioFile(const char* name);
-void showMenu();
-void checkEncoder();
-void drawVolume();
-void IRAM_ATTR encoderISR();
+struct Track {
+    char path[Config::MAX_PATH_LENGTH];
+};
 
-void setup() {
-  Serial.begin(115200);
-  delay(500);
-  Serial.println("\n--- Simple Player ---");
+// -----------------------------------------------------------------------------
+// Playlist
+// -----------------------------------------------------------------------------
 
-  tft.init();
-  tft.setRotation(1);
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setCursor(10, 10);
-  tft.println("Loading...");
+class Playlist {
+public:
+    bool load()
+    {
+        trackCount = 0;
 
-  SDSPI.begin(SD_SPI_SCK, SD_SPI_MISO, SD_SPI_MOSI, SD_SPI_CS);
-  if (!SD.begin(SD_SPI_CS, SDSPI, 8000000)) {
-    Serial.println("SD FAILED");
-    tft.fillScreen(TFT_BLACK);
-    tft.setCursor(10, 10);
-    tft.println("SD card failed to load");
-    return;
-  }
-  Serial.println("SD working");
+        File directory = SD.open("/library");
 
-  audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-  audio.setVolume(15);
-  Serial.println("Audio working");
-
-  File dir = SD.open("/library");
-  if (dir) {
-    while (trackCount < MAX_TRACKS) {
-      File entry = dir.openNextFile();
-      if (!entry) break;
-      if (!entry.isDirectory()) {
-        const char* n = entry.name();
-        if (isAudioFile(n)) {
-          if (n[0] == '/')
-            snprintf(playlist[trackCount], MAX_PATH, "%s", n);
-          else
-            snprintf(playlist[trackCount], MAX_PATH, "/library/%s", n);
-          trackCount++;
+        if (!directory || !directory.isDirectory()) {
+            if (directory) {
+                directory.close();
+            }
+            return false;
         }
-      }
-      entry.close();
+
+        while (trackCount < Config::MAX_TRACKS) {
+            File entry = directory.openNextFile();
+
+            if (!entry) {
+                break;
+            }
+
+            if (!entry.isDirectory() && isAudioFile(entry.name())) {
+                addTrack(entry.name());
+            }
+
+            entry.close();
+        }
+
+        directory.close();
+
+        Serial.print("Found ");
+        Serial.print(trackCount);
+        Serial.println(" songs");
+
+        return true;
     }
-    dir.close();
-  }
-  Serial.print("Found ");
-  Serial.print(trackCount);
-  Serial.println(" songs");
 
-  pinMode(ENC_SW, INPUT_PULLUP);
-  pinMode(ENC_CLK, INPUT_PULLUP);
-  pinMode(ENC_DT, INPUT_PULLUP);
-
-  // initialise encoder state before enabling interrupts
-  lastEncoderCounter = (digitalRead(ENC_CLK) << 1) | digitalRead(ENC_DT);
-
-  // hardware interrupts on BOTH pins so we never miss a transition
-  attachInterrupt(digitalPinToInterrupt(ENC_CLK), encoderISR, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENC_DT), encoderISR, CHANGE);
-
-  randomSeed(esp_random());
-  if (trackCount > 0) {
-    currentTrack = random(0, trackCount);
-    playTrack(currentTrack);
-  } else {
-    tft.fillScreen(TFT_BLACK);
-    tft.setCursor(10, 10);
-    tft.println("No songs found");
-  }
-}
-
-void playTrack(int index) {
-  if (index < 0 || index >= trackCount) return;
-  currentTrack = index;
-  paused = false;
-  trackStartMs = millis();
-  showTrackName();
-  audio.connecttoFS(SD, playlist[index]);
-  Serial.print("Playing: ");
-  Serial.println(playlist[index]);
-}
-
-bool isAudioFile(const char* name) {
-  int len = strlen(name);
-  if (len < 5) return false;
-  const char* ext = name + len - 4;
-  return (strcasecmp(ext, ".mp3") == 0 ||
-          strcasecmp(ext, ".wav") == 0);
-}
-
-void showTrackName() {
-  const char* path = playlist[currentTrack];
-  const char* slash = strrchr(path, '/');
-  const char* base = slash ? slash + 1 : path;
-
-  char name[80];
-  strncpy(name, base, sizeof(name) - 1);
-  name[sizeof(name) - 1] = '\0';
-
-  char* dot = strrchr(name, '.');
-  if (dot) *dot = '\0';
-
-  int nameLen = strlen(name);
-
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setCursor(10, 10);
-  tft.println("Now Playing");
-
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(2);
-
-  if (nameLen <= 22) {
-    int x = (320 - nameLen * 12) / 2;
-    if (x < 0) x = 0;
-    tft.setCursor(x, 100);
-    tft.println(name);
-  } else {
-    int middle = nameLen / 2;
-    for (int i = 0; i < 10; i++) {
-      if (middle + i < nameLen && name[middle + i] == ' ') {
-        middle = middle + i;
-        break;
-      }
-      if (middle - i > 0 && name[middle - i] == ' ') {
-        middle = middle - i;
-        break;
-      }
+    uint16_t size() const
+    {
+        return trackCount;
     }
-    char line1[80], line2[80];
-    strncpy(line1, name, middle);
-    line1[middle] = '\0';
-    strncpy(line2, name + middle, sizeof(line2) - 1);
-    line2[sizeof(line2) - 1] = '\0';
-    tft.setCursor(10, 80);
-    tft.println(line1);
-    tft.setCursor(10, 110);
-    tft.println(line2);
-  }
 
-  tft.setTextColor(paused ? TFT_ORANGE : TFT_GREEN, TFT_BLACK);
-  tft.setCursor(10, 160);
-  tft.println(paused ? "PAUSED" : "PLAYING");
-
-  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  tft.setTextSize(1);
-  tft.setCursor(10, 220);
-  tft.print("Song ");
-  tft.print(currentTrack + 1);
-  tft.print(" of ");
-  tft.print(trackCount);
-
-  // show volume at the bottom
-  drawVolume();
-}
-
-void skipToRandom() {
-  if (trackCount <= 1) return;
-  int n = currentTrack;
-  int tries = 0;
-  while (n == currentTrack && tries < 20) {
-    n = random(0, trackCount);
-    tries++;
-  }
-  playTrack(n);
-}
-
-//simple menu design
-void showMenu() {
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setCursor(10, 10);
-  tft.println("MENU");
-  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft.setCursor(10, 60);
-  tft.println("Return to Music");
-}
-
-//draw volume text at the bottom
-void drawVolume() {
-  //create space at the bottom of the screen
-  tft.fillRect(0, 230, 320, 10, TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(1);
-  tft.setCursor(10, 230);
-  tft.print("Volume: ");
-  tft.print(volume);
-}
-
-//interrupt fires on ANY change of CLK or DT
-void IRAM_ATTR encoderISR() {
-  static uint8_t prevState = 0;
-  uint8_t currState = (digitalRead(ENC_CLK) << 1) | digitalRead(ENC_DT);
-  uint8_t transition = (prevState << 2) | currState;
-
-  //valid quadrature transitions only
-  switch (transition) {
-    case 0b0001: case 0b0111: case 0b1110: case 0b1000:
-      encoderCounter--;
-      break;
-    case 0b0010: case 0b1011: case 0b1101: case 0b0100:
-      encoderCounter++;
-      break;
-    //any other transition is a bounce therefore ignored
-  }
-  prevState = currState;
-}
-
-//read the interrupt counter and update volume
-void checkEncoder() {
-  noInterrupts();
-  int current = encoderCounter;
-  interrupts();
-
-  if (current != lastEncoderCounter) {
-    int diff = current - lastEncoderCounter;
-
-    //each physical click = 4 quadrature steps for the encoder
-    int clicks = diff / 4;
-
-    if (clicks != 0) {
-      volume += clicks;
-      volume = constrain(volume, 0, 21);
-      audio.setVolume(volume);
-      Serial.print("Volume: ");
-      Serial.println(volume);
-
-      if (!menuOpen) {
-        drawVolume();
-      }
-      //only consume the whole clicks, keep the remainder for next time
-      lastEncoderCounter += clicks * 4;
+    bool empty() const
+    {
+        return trackCount == 0;
     }
-  }
+
+    const Track* get(int index) const
+    {
+        if (index < 0 || index >= trackCount) {
+            return nullptr;
+        }
+
+        return &tracks[index];
+    }
+
+    int randomIndexExcept(int currentIndex) const
+    {
+        if (trackCount == 0) {
+            return -1;
+        }
+
+        if (trackCount == 1) {
+            return 0;
+        }
+
+        int index;
+
+        do {
+            index = random(0, trackCount);
+        } while (index == currentIndex);
+
+        return index;
+    }
+
+private:
+    Track tracks[Config::MAX_TRACKS];
+    uint16_t trackCount = 0;
+
+    static bool isAudioFile(const char* filename)
+    {
+        const size_t length = strlen(filename);
+
+        if (length < 5) {
+            return false;
+        }
+
+        const char* extension = filename + length - 4;
+
+        return strcasecmp(extension, ".mp3") == 0 ||
+               strcasecmp(extension, ".wav") == 0;
+    }
+
+    void addTrack(const char* filename)
+    {
+        if (trackCount >= Config::MAX_TRACKS) {
+            return;
+        }
+
+        if (filename[0] == '/') {
+            snprintf(
+                tracks[trackCount].path,
+                Config::MAX_PATH_LENGTH,
+                "%s",
+                filename
+            );
+        } else {
+            snprintf(
+                tracks[trackCount].path,
+                Config::MAX_PATH_LENGTH,
+                "/library/%s",
+                filename
+            );
+        }
+
+        ++trackCount;
+    }
+};
+
+// -----------------------------------------------------------------------------
+// Display
+// -----------------------------------------------------------------------------
+
+class Display {
+public:
+    void begin()
+    {
+        tft.init();
+        tft.setRotation(1);
+        showLoading();
+    }
+
+    void showLoading()
+    {
+        clear();
+        setText(TFT_WHITE, 2);
+        tft.setCursor(10, 10);
+        tft.println("Loading...");
+    }
+
+    void showError(const char* message)
+    {
+        clear();
+
+        setText(TFT_RED, 2);
+        tft.setCursor(10, 10);
+        tft.println("ERROR");
+
+        setText(TFT_WHITE, 2);
+        tft.setCursor(10, 50);
+        tft.println(message);
+    }
+
+    void showNoTracks()
+    {
+        clear();
+
+        setText(TFT_YELLOW, 2);
+        tft.setCursor(10, 10);
+        tft.println("No songs found");
+
+        setText(TFT_WHITE, 1);
+        tft.setCursor(10, 50);
+        tft.println("Add MP3/WAV files to");
+        tft.setCursor(10, 65);
+        tft.println("/library");
+    }
+
+    void showNowPlaying(
+        const char* path,
+        int trackNumber,
+        int totalTracks,
+        PlayerState state,
+        int volume
+    )
+    {
+        clear();
+
+        setText(TFT_CYAN, 2);
+        tft.setCursor(10, 10);
+        tft.println("NOW PLAYING");
+
+        drawTrackName(path);
+
+        const bool paused = state == PlayerState::Paused;
+
+        setText(paused ? TFT_ORANGE : TFT_GREEN, 2);
+        tft.setCursor(10, 160);
+        tft.println(paused ? "PAUSED" : "PLAYING");
+
+        setText(TFT_DARKGREY, 1);
+        tft.setCursor(10, 210);
+        tft.print("Song ");
+        tft.print(trackNumber);
+        tft.print(" of ");
+        tft.print(totalTracks);
+
+        drawVolume(volume);
+    }
+
+    void showMenu()
+    {
+        clear();
+
+        setText(TFT_WHITE, 2);
+        tft.setCursor(10, 10);
+        tft.println("MENU");
+
+        setText(TFT_YELLOW, 2);
+        tft.setCursor(10, 60);
+        tft.println("Return to Music");
+
+        setText(TFT_DARKGREY, 1);
+        tft.setCursor(10, 220);
+        tft.println("Press button to return");
+    }
+
+private:
+    TFT_eSPI tft;
+
+    void clear()
+    {
+        tft.fillScreen(TFT_BLACK);
+    }
+
+    void setText(uint16_t color, uint8_t size)
+    {
+        tft.setTextColor(color, TFT_BLACK);
+        tft.setTextSize(size);
+    }
+
+    void drawVolume(int volume)
+    {
+        tft.fillRect(0, 230, Config::SCREEN_WIDTH, 10, TFT_BLACK);
+
+        setText(TFT_WHITE, 1);
+        tft.setCursor(10, 230);
+        tft.print("Volume: ");
+        tft.print(volume);
+    }
+
+    void drawTrackName(const char* path)
+    {
+        const char* slash = strrchr(path, '/');
+        const char* baseName = slash ? slash + 1 : path;
+
+        char name[80];
+        strncpy(name, baseName, sizeof(name) - 1);
+        name[sizeof(name) - 1] = '\0';
+
+        char* extension = strrchr(name, '.');
+
+        if (extension) {
+            *extension = '\0';
+        }
+
+        const int length = strlen(name);
+
+        setText(TFT_WHITE, 2);
+
+        if (length <= 22) {
+            int x = (Config::SCREEN_WIDTH - length * 12) / 2;
+
+            if (x < 0) {
+                x = 0;
+            }
+
+            tft.setCursor(x, 100);
+            tft.println(name);
+            return;
+        }
+
+        int split = length / 2;
+
+        for (int offset = 0; offset < 10; ++offset) {
+            if (split + offset < length && name[split + offset] == ' ') {
+                split += offset;
+                break;
+            }
+
+            if (split - offset > 0 && name[split - offset] == ' ') {
+                split -= offset;
+                break;
+            }
+        }
+
+        char firstLine[80];
+        char secondLine[80];
+
+        strncpy(firstLine, name, split);
+        firstLine[split] = '\0';
+
+        const int secondStart = (split < length && name[split] == ' ')
+            ? split + 1
+            : split;
+
+        strncpy(
+            secondLine,
+            name + secondStart,
+            sizeof(secondLine) - 1
+        );
+
+        secondLine[sizeof(secondLine) - 1] = '\0';
+
+        tft.setCursor(10, 80);
+        tft.println(firstLine);
+
+        tft.setCursor(10, 110);
+        tft.println(secondLine);
+    }
+};
+
+// -----------------------------------------------------------------------------
+// Rotary encoder
+// -----------------------------------------------------------------------------
+
+class Encoder {
+public:
+    void begin()
+    {
+        pinMode(Config::ENCODER_CLK, INPUT_PULLUP);
+        pinMode(Config::ENCODER_DT, INPUT_PULLUP);
+
+        previousState =
+            (digitalRead(Config::ENCODER_CLK) << 1) |
+            digitalRead(Config::ENCODER_DT);
+
+        counter = 0;
+        lastCounter = 0;
+
+        attachInterrupt(
+            digitalPinToInterrupt(Config::ENCODER_CLK),
+            isr,
+            CHANGE
+        );
+
+        attachInterrupt(
+            digitalPinToInterrupt(Config::ENCODER_DT),
+            isr,
+            CHANGE
+        );
+    }
+
+    int consumeClicks()
+    {
+        noInterrupts();
+        const int currentCounter = counter;
+        interrupts();
+
+        const int steps = currentCounter - lastCounter;
+        const int clicks = steps / 4;
+
+        if (clicks != 0) {
+            lastCounter += clicks * 4;
+        }
+
+        return clicks;
+    }
+
+private:
+    static volatile int counter;
+    static volatile uint8_t previousState;
+
+    int lastCounter = 0;
+
+    static void IRAM_ATTR isr()
+    {
+        const uint8_t currentState =
+            (digitalRead(Config::ENCODER_CLK) << 1) |
+            digitalRead(Config::ENCODER_DT);
+
+        const uint8_t transition =
+            (previousState << 2) | currentState;
+
+        switch (transition) {
+            case 0b0001:
+            case 0b0111:
+            case 0b1110:
+            case 0b1000:
+                --counter;
+                break;
+
+            case 0b0010:
+            case 0b1011:
+            case 0b1101:
+            case 0b0100:
+                ++counter;
+                break;
+
+            default:
+                break;
+        }
+
+        previousState = currentState;
+    }
+};
+
+volatile int Encoder::counter = 0;
+volatile uint8_t Encoder::previousState = 0;
+
+// -----------------------------------------------------------------------------
+// Button input
+// -----------------------------------------------------------------------------
+
+enum class ButtonEvent {
+    None,
+    SingleClick,
+    DoubleClick,
+    LongPress
+};
+
+class Button {
+public:
+    void begin()
+    {
+        pinMode(Config::ENCODER_SW, INPUT_PULLUP);
+    }
+
+    ButtonEvent update()
+    {
+        const bool pressed = digitalRead(Config::ENCODER_SW) == LOW;
+        const uint32_t now = millis();
+
+        if (pressed && !lastPressed) {
+            pressStart = now;
+            longPressHandled = false;
+
+            if (clickCount == 0) {
+                firstClick = now;
+            }
+
+            ++clickCount;
+        }
+
+        if (pressed &&
+            !longPressHandled &&
+            now - pressStart >= Config::LONG_PRESS_MS) {
+
+            longPressHandled = true;
+            clickCount = 0;
+            lastPressed = pressed;
+
+            return ButtonEvent::LongPress;
+        }
+
+        if (!pressed && lastPressed && longPressHandled) {
+            longPressHandled = false;
+            lastPressed = pressed;
+            return ButtonEvent::None;
+        }
+
+        lastPressed = pressed;
+
+        if (clickCount > 0 &&
+            now - firstClick >= Config::CLICK_TIMEOUT_MS) {
+
+            const ButtonEvent event =
+                clickCount == 1
+                    ? ButtonEvent::SingleClick
+                    : ButtonEvent::DoubleClick;
+
+            clickCount = 0;
+            return event;
+        }
+
+        return ButtonEvent::None;
+    }
+
+private:
+    bool lastPressed = false;
+    bool longPressHandled = false;
+    uint8_t clickCount = 0;
+
+    uint32_t firstClick = 0;
+    uint32_t pressStart = 0;
+};
+
+// -----------------------------------------------------------------------------
+// Audio player
+// -----------------------------------------------------------------------------
+
+class AudioPlayer {
+public:
+    void begin()
+    {
+        audio.setPinout(
+            Config::I2S_BCLK,
+            Config::I2S_LRC,
+            Config::I2S_DOUT
+        );
+
+        audio.setVolume(volume);
+
+        Serial.println("Audio initialised");
+    }
+
+    void update()
+    {
+        audio.loop();
+    }
+
+    void play(const char* path)
+    {
+        paused = false;
+        trackStarted = millis();
+
+        noInterrupts();
+        trackEnded = false;
+        interrupts();
+
+        audio.connecttoFS(SD, path);
+
+        Serial.print("Playing: ");
+        Serial.println(path);
+    }
+
+    void togglePause()
+    {
+        audio.pauseResume();
+        paused = !paused;
+    }
+
+    void setVolume(int newVolume)
+    {
+        volume = constrain(
+            newVolume,
+            Config::MIN_VOLUME,
+            Config::MAX_VOLUME
+        );
+
+        audio.setVolume(volume);
+    }
+
+    int getVolume() const
+    {
+        return volume;
+    }
+
+    bool isPaused() const
+    {
+        return paused;
+    }
+
+    bool consumeTrackEnded()
+    {
+        noInterrupts();
+        const bool ended = trackEnded;
+        trackEnded = false;
+        interrupts();
+
+        return ended;
+    }
+
+    void onEndOfFile()
+    {
+        if (millis() - trackStarted < Config::EOF_GUARD_MS) {
+            Serial.println("(ignoring spurious EOF)");
+            return;
+        }
+
+        trackEnded = true;
+    }
+
+private:
+    Audio audio;
+
+    int volume = Config::DEFAULT_VOLUME;
+    bool paused = false;
+
+    volatile bool trackEnded = false;
+    uint32_t trackStarted = 0;
+
+    friend void audio_eof_mp3(const char* info);
+};
+
+// -----------------------------------------------------------------------------
+// Player application
+// -----------------------------------------------------------------------------
+
+class Player {
+public:
+    void begin()
+    {
+        Serial.begin(115200);
+        delay(500);
+
+        Serial.println();
+        Serial.println("--- ESP32 MP3 Player v2 ---");
+
+        display.begin();
+
+        spi.begin(
+            Config::SD_SCK,
+            Config::SD_MISO,
+            Config::SD_MOSI,
+            Config::SD_CS
+        );
+
+        if (!SD.begin(Config::SD_CS, spi, Config::SD_FREQUENCY)) {
+            Serial.println("SD initialisation failed");
+            state = PlayerState::Error;
+            display.showError("SD card failed");
+            return;
+        }
+
+        Serial.println("SD working");
+
+        audio.begin();
+
+        if (!playlist.load()) {
+            Serial.println("Could not open /library");
+            state = PlayerState::Error;
+            display.showError("Library not found");
+            return;
+        }
+
+        if (playlist.empty()) {
+            state = PlayerState::Error;
+            display.showNoTracks();
+            return;
+        }
+
+        encoder.begin();
+        button.begin();
+
+        randomSeed(esp_random());
+
+        state = PlayerState::Playing;
+        ready = true;
+
+        playRandomTrack();
+    }
+
+    void update()
+    {
+        if (!ready) {
+            return;
+        }
+
+        audio.update();
+
+        handleTrackEnd();
+        handleEncoder();
+        handleButton(button.update());
+    }
+
+    void onAudioEnd()
+    {
+        audio.onEndOfFile();
+    }
+
+private:
+    SPIClass spi = SPIClass(HSPI);
+
+    Display display;
+    Playlist playlist;
+    Encoder encoder;
+    Button button;
+    AudioPlayer audio;
+
+    PlayerState state = PlayerState::Error;
+
+    int currentTrack = -1;
+    bool ready = false;
+
+    void playTrack(int index)
+    {
+        const Track* track = playlist.get(index);
+
+        if (!track) {
+            return;
+        }
+
+        currentTrack = index;
+        state = PlayerState::Playing;
+
+        audio.play(track->path);
+        refreshDisplay();
+    }
+
+    void playRandomTrack()
+    {
+        const int nextTrack =
+            playlist.randomIndexExcept(currentTrack);
+
+        if (nextTrack >= 0) {
+            playTrack(nextTrack);
+        }
+    }
+
+    void handleTrackEnd()
+    {
+        if (audio.consumeTrackEnded()) {
+            playRandomTrack();
+        }
+    }
+
+    void handleEncoder()
+    {
+        if (state == PlayerState::Menu) {
+            return;
+        }
+
+        const int clicks = encoder.consumeClicks();
+
+        if (clicks == 0) {
+            return;
+        }
+
+        audio.setVolume(audio.getVolume() + clicks);
+
+        Serial.print("Volume: ");
+        Serial.println(audio.getVolume());
+
+        refreshDisplay();
+    }
+
+    void handleButton(ButtonEvent event)
+    {
+        switch (event) {
+            case ButtonEvent::SingleClick:
+                handleSingleClick();
+                break;
+
+            case ButtonEvent::DoubleClick:
+                if (state != PlayerState::Menu) {
+                    playRandomTrack();
+                    Serial.println("Skipped to random track");
+                }
+                break;
+
+            case ButtonEvent::LongPress:
+                state = PlayerState::Menu;
+                display.showMenu();
+                break;
+
+            case ButtonEvent::None:
+                break;
+        }
+    }
+
+    void handleSingleClick()
+    {
+        if (state == PlayerState::Menu) {
+            state = audio.isPaused()
+                ? PlayerState::Paused
+                : PlayerState::Playing;
+
+            refreshDisplay();
+            return;
+        }
+
+        audio.togglePause();
+
+        state = audio.isPaused()
+            ? PlayerState::Paused
+            : PlayerState::Playing;
+
+        Serial.println(audio.isPaused() ? "Paused" : "Playing");
+
+        refreshDisplay();
+    }
+
+    void refreshDisplay()
+    {
+        const Track* track = playlist.get(currentTrack);
+
+        if (!track) {
+            return;
+        }
+
+        display.showNowPlaying(
+            track->path,
+            currentTrack + 1,
+            playlist.size(),
+            state,
+            audio.getVolume()
+        );
+    }
+};
+
+Player player;
+
+// Audio_nopsram callback.
+// Keep this function at global scope because the library looks for this
+// exact callback name.
+void audio_eof_mp3(const char* info)
+{
+    (void)info;
+    player.onAudioEnd();
 }
 
-void loop() {
-  audio.loop();
+// -----------------------------------------------------------------------------
+// Arduino entry points
+// -----------------------------------------------------------------------------
 
-  if (trackEnded) {
-    trackEnded = false;
-    skipToRandom();
-  }
-
-  if (!menuOpen) {
-    checkEncoder();
-  }
-
-  bool button = digitalRead(ENC_SW);
-
-  if (button == LOW && lastButtonState == HIGH) {
-    if (menuOpen) {
-      //short press in menu goes back to music/main home screen
-      menuOpen = false;
-      showTrackName();
-      lastButtonState = button;
-      return;
-    }
-    //single press
-    buttonPressTime = millis();
-    if (clickCount == 0) firstClickTime = millis();
-    clickCount++;
-    Serial.print("Click: ");
-    Serial.println(clickCount);
-  }
-
-  //long press detection 1 second
-  if (button == LOW && !longPressHandled && (millis() - buttonPressTime > 1000)) {
-    longPressHandled = true;
-    menuOpen = true;
-    showMenu();
-    clickCount = 0;
-  }
-
-  if (button == HIGH && lastButtonState == LOW) {
-    if (longPressHandled) {
-      longPressHandled = false;
-    }
-  }
-
-  lastButtonState = button;
-
-  //once 400ms has passed with no new clicks
-  if (!menuOpen && !longPressHandled && clickCount > 0 && (millis() - firstClickTime) > 400) {
-    if (clickCount == 1) {
-      audio.pauseResume();
-      paused = !paused;
-      showTrackName();
-      Serial.println("Pause/Play");
-    } else {
-      skipToRandom();
-      Serial.println("Skip");
-    }
-    clickCount = 0;
-  }
+void setup()
+{
+    player.begin();
 }
 
-void audio_eof_mp3(const char *info) {
-  unsigned long now = millis();
-  if (now - trackStartMs < 2000) {
-    Serial.println("(ignoring spurious EOF)");
-    return;
-  }
-  trackEnded = true;
+void loop()
+{
+    player.update();
 }
