@@ -1,0 +1,11 @@
+#include "Display.h"
+void Display::begin(){tft.init();tft.setRotation(1);showLoading();}
+void Display::clear(){tft.fillScreen(TFT_BLACK);}
+void Display::text(uint16_t c,uint8_t s){tft.setTextColor(c,TFT_BLACK);tft.setTextSize(s);}
+void Display::showLoading(){clear();text(TFT_WHITE,2);tft.setCursor(10,10);tft.println("Loading...");}
+void Display::showError(const char* m){clear();text(TFT_RED,2);tft.setCursor(10,10);tft.println("ERROR");text(TFT_WHITE,2);tft.setCursor(10,50);tft.println(m);}
+void Display::showNoTracks(){clear();text(TFT_YELLOW,2);tft.setCursor(10,10);tft.println("No songs found");text(TFT_WHITE,1);tft.setCursor(10,50);tft.println("Add MP3/WAV files to");tft.setCursor(10,65);tft.println("/library");}
+void Display::showNowPlaying(const char* p,int n,int total,PlayerState s,int v){clear();text(TFT_CYAN,2);tft.setCursor(10,10);tft.println("NOW PLAYING");drawTrackName(p);text(s==PlayerState::Paused?TFT_ORANGE:TFT_GREEN,2);tft.setCursor(10,160);tft.println(s==PlayerState::Paused?"PAUSED":"PLAYING");text(TFT_DARKGREY,1);tft.setCursor(10,210);tft.print("Song ");tft.print(n);tft.print(" of ");tft.print(total);drawVolume(v);}
+void Display::showMenu(){clear();text(TFT_WHITE,2);tft.setCursor(10,10);tft.println("MENU");text(TFT_YELLOW,2);tft.setCursor(10,60);tft.println("Return to Music");text(TFT_DARKGREY,1);tft.setCursor(10,220);tft.println("Press button to return");}
+void Display::drawVolume(int v){tft.fillRect(0,230,Config::SCREEN_WIDTH,10,TFT_BLACK);text(TFT_WHITE,1);tft.setCursor(10,230);tft.print("Volume: ");tft.print(v);}
+void Display::drawTrackName(const char* p){const char* s=strrchr(p,'/');const char* b=s?s+1:p;char n[80];strncpy(n,b,sizeof(n)-1);n[sizeof(n)-1]='\0';char* dot=strrchr(n,'.');if(dot)*dot='\0';int l=strlen(n);text(TFT_WHITE,2);if(l<=22){int x=(Config::SCREEN_WIDTH-l*12)/2;if(x<0)x=0;tft.setCursor(x,100);tft.println(n);return;}int split=l/2;for(int o=0;o<10;++o){if(split+o<l&&n[split+o]==' '){split+=o;break;}if(split-o>0&&n[split-o]==' '){split-=o;break;}}char a[80],b2[80];strncpy(a,n,split);a[split]='\0';int start=(split<l&&n[split]==' ')?split+1:split;strncpy(b2,n+start,sizeof(b2)-1);b2[sizeof(b2)-1]='\0';tft.setCursor(10,80);tft.println(a);tft.setCursor(10,110);tft.println(b2);}
