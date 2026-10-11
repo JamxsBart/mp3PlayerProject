@@ -34,6 +34,7 @@ char playlist[MAX_TRACKS][MAX_PATH];
 int trackCount = 0;
 int currentTrack = -1;
 bool paused = false;
+bool playerReady = false;
 
 volatile bool trackEnded = false;
 
@@ -47,6 +48,7 @@ unsigned long firstClickTime = 0;
 //volume control code
 int volume = 15;
 volatile int encoderCounter = 0;
+volatile uint8_t lastEncoderState = 0;
 int lastEncoderCounter = 0;
 unsigned long buttonPressTime = 0;
 bool menuOpen = false;
@@ -116,7 +118,7 @@ void setup() {
   pinMode(ENC_DT, INPUT_PULLUP);
 
   // initialise encoder state before enabling interrupts
-  lastEncoderCounter = (digitalRead(ENC_CLK) << 1) | digitalRead(ENC_DT);
+  lastEncoderState = (digitalRead(ENC_CLK) << 1) | digitalRead(ENC_DT);
 
   // hardware interrupts on BOTH pins so we never miss a transition
   attachInterrupt(digitalPinToInterrupt(ENC_CLK), encoderISR, CHANGE);
@@ -124,6 +126,7 @@ void setup() {
 
   randomSeed(esp_random());
   if (trackCount > 0) {
+    playerReady = true;
     currentTrack = random(0, trackCount);
     playTrack(currentTrack);
   } else {
@@ -153,6 +156,8 @@ bool isAudioFile(const char* name) {
 }
 
 void showTrackName() {
+  if (currentTrack < 0 || currentTrack >= trackCount) return;
+
   const char* path = playlist[currentTrack];
   const char* slash = strrchr(path, '/');
   const char* base = slash ? slash + 1 : path;
@@ -255,9 +260,8 @@ void drawVolume() {
 
 //interrupt fires on ANY change of CLK or DT
 void IRAM_ATTR encoderISR() {
-  static uint8_t prevState = 0;
   uint8_t currState = (digitalRead(ENC_CLK) << 1) | digitalRead(ENC_DT);
-  uint8_t transition = (prevState << 2) | currState;
+  uint8_t transition = (lastEncoderState << 2) | currState;
 
   //valid quadrature transitions only
   switch (transition) {
@@ -269,7 +273,7 @@ void IRAM_ATTR encoderISR() {
       break;
     //any other transition is a bounce therefore ignored
   }
-  prevState = currState;
+  lastEncoderState = currState;
 }
 
 //read the interrupt counter and update volume
@@ -301,6 +305,12 @@ void checkEncoder() {
 }
 
 void loop() {
+  //do not run the controls if the SD card or music library failed to load
+  if (!playerReady) {
+    delay(20);
+    return;
+  }
+
   audio.loop();
 
   if (trackEnded) {
