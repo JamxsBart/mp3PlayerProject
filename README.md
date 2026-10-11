@@ -67,7 +67,7 @@ This project uses these versions:
 3. Install version `2.5.43` of `TFT_eSPI` in the Library Manager.
 4. Download the pinned [`Audio_nopsram` ZIP](https://github.com/PLSousa/ESP32-audioI2S/archive/e9afa7f8f3d899a824bf46ab559e0eb8adf0b015.zip) and add it using **Sketch > Include Library > Add .ZIP Library**.
 5. Configure `TFT_eSPI` for your display.
-6. Open `src/mp3PlayerMain.ino`.
+6. Open `mp3PlayerMain/mp3PlayerMain.ino`.
 7. Select `ESP32 Dev Module` as the board.
 8. Set PSRAM to `Disabled`, CPU frequency to `240 MHz`, and partition scheme to `Huge APP (3MB No OTA/1MB SPIFFS)`.
 9. Select the correct port and upload the sketch.
@@ -107,9 +107,22 @@ The sketch uses `Audio_nopsram.h`. Do not replace it with the current `Audio.h` 
 ```text
 .
 ├── README.md
-└── src/
+└── mp3PlayerMain/
+    ├── Config.h
+    ├── Controls.cpp
+    ├── Controls.h
+    ├── Display.cpp
+    ├── Display.h
+    ├── Player.cpp
+    ├── Player.h
     └── mp3PlayerMain.ino
 ```
+
+- `mp3PlayerMain.ino` starts and updates the project
+- `Config.h` stores the pin numbers and limits
+- `Controls` handles the rotary encoder and its button
+- `Display` draws the player screens
+- `Player` handles the SD card, playlist and audio playback
 
 ## License
 
