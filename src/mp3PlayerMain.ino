@@ -42,6 +42,8 @@ unsigned long trackStartMs = 0;
 
 //button edge detection
 bool lastButtonState = HIGH;
+bool lastButtonReading = HIGH;
+unsigned long lastDebounceTime = 0;
 int clickCount = 0;
 unsigned long firstClickTime = 0;
 
@@ -54,9 +56,10 @@ unsigned long buttonPressTime = 0;
 bool menuOpen = false;
 bool longPressHandled = false;
 
-void playTrack(int index);
+bool playTrack(int index);
 void showTrackName();
 void skipToRandom();
+void tryAnotherTrack();
 bool isAudioFile(const char* name);
 void showMenu();
 void checkEncoder();
@@ -117,6 +120,9 @@ void setup() {
   pinMode(ENC_CLK, INPUT_PULLUP);
   pinMode(ENC_DT, INPUT_PULLUP);
 
+  lastButtonState = digitalRead(ENC_SW);
+  lastButtonReading = lastButtonState;
+
   // initialise encoder state before enabling interrupts
   lastEncoderState = (digitalRead(ENC_CLK) << 1) | digitalRead(ENC_DT);
 
@@ -128,7 +134,9 @@ void setup() {
   if (trackCount > 0) {
     playerReady = true;
     currentTrack = random(0, trackCount);
-    playTrack(currentTrack);
+    if (!playTrack(currentTrack)) {
+      tryAnotherTrack();
+    }
   } else {
     tft.fillScreen(TFT_BLACK);
     tft.setCursor(10, 10);
@@ -136,15 +144,27 @@ void setup() {
   }
 }
 
-void playTrack(int index) {
-  if (index < 0 || index >= trackCount) return;
+bool playTrack(int index) {
+  if (index < 0 || index >= trackCount) return false;
   currentTrack = index;
   paused = false;
   trackStartMs = millis();
+
+  if (!audio.connecttoFS(SD, playlist[index])) {
+    Serial.print("Failed to load: ");
+    Serial.println(playlist[index]);
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.setTextSize(2);
+    tft.setCursor(10, 10);
+    tft.println("Track failed to load");
+    return false;
+  }
+
   showTrackName();
-  audio.connecttoFS(SD, playlist[index]);
   Serial.print("Playing: ");
   Serial.println(playlist[index]);
+  return true;
 }
 
 bool isAudioFile(const char* name) {
@@ -232,7 +252,26 @@ void skipToRandom() {
     n = random(0, trackCount);
     tries++;
   }
-  playTrack(n);
+  if (!playTrack(n)) {
+    tryAnotherTrack();
+  }
+}
+
+//try each of the other songs if one cannot be loaded
+void tryAnotherTrack() {
+  int failedTrack = currentTrack;
+
+  for (int i = 1; i < trackCount; i++) {
+    int n = (failedTrack + i) % trackCount;
+    if (playTrack(n)) return;
+  }
+
+  playerReady = false;
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_RED, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setCursor(10, 10);
+  tft.println("No playable songs");
 }
 
 //simple menu design
@@ -322,7 +361,18 @@ void loop() {
     checkEncoder();
   }
 
-  bool button = digitalRead(ENC_SW);
+  bool buttonReading = digitalRead(ENC_SW);
+
+  //wait for the button reading to stay the same before using it
+  if (buttonReading != lastButtonReading) {
+    lastDebounceTime = millis();
+    lastButtonReading = buttonReading;
+  }
+
+  bool button = lastButtonState;
+  if (millis() - lastDebounceTime > 30) {
+    button = buttonReading;
+  }
 
   if (button == LOW && lastButtonState == HIGH) {
     if (menuOpen) {
