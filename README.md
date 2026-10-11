@@ -13,7 +13,7 @@ A small ESP32 project that plays MP3 and WAV files from an SD card and shows the
 
 ## Hardware
 
-- ESP32 board
+- ESP32 Dev Module without PSRAM
 - TFT display compatible with `TFT_eSPI`
 - MicroSD card module
 - I2S audio output module or DAC
@@ -53,18 +53,27 @@ Only files ending in `.mp3` or `.wav` are used.
 
 ## Software
 
-1. Install Arduino IDE or another ESP32-compatible environment.
-2. Add ESP32 board support.
-3. Install these libraries:
-   - `TFT_eSPI`
-   - `Audio_nopsram`
-   - `SD`
-   - `SPI`
-4. Configure `TFT_eSPI` for your display.
-5. Open `src/mp3PlayerMain.ino`.
-6. Select the correct ESP32 board and port.
-7. Upload the sketch.
-8. Insert the SD card and open the serial monitor at `115200`.
+This project uses these versions:
+
+- Arduino IDE `2.3.8`
+- Espressif ESP32 board package `3.3.7`
+- `TFT_eSPI` version `2.5.43`
+- [`Audio_nopsram`](https://github.com/PLSousa/ESP32-audioI2S) commit `e9afa7f8f3d899a824bf46ab559e0eb8adf0b015`
+
+`SD` and `SPI` are included with the ESP32 board package and do not need to be installed separately.
+
+1. Install Arduino IDE `2.3.8`.
+2. Install version `3.3.7` of `esp32` by Espressif Systems in the Boards Manager.
+3. Install version `2.5.43` of `TFT_eSPI` in the Library Manager.
+4. Download the pinned [`Audio_nopsram` ZIP](https://github.com/PLSousa/ESP32-audioI2S/archive/e9afa7f8f3d899a824bf46ab559e0eb8adf0b015.zip) and add it using **Sketch > Include Library > Add .ZIP Library**.
+5. Configure `TFT_eSPI` for your display.
+6. Open `src/mp3PlayerMain.ino`.
+7. Select `ESP32 Dev Module` as the board.
+8. Set PSRAM to `Disabled`, CPU frequency to `240 MHz`, and partition scheme to `Huge APP (3MB No OTA/1MB SPIFFS)`.
+9. Select the correct port and upload the sketch.
+10. Insert the SD card and open the serial monitor at `115200`.
+
+The sketch uses `Audio_nopsram.h`. Do not replace it with the current `Audio.h` version of ESP32-audioI2S because it uses a different API and requires PSRAM.
 
 ## Controls
 

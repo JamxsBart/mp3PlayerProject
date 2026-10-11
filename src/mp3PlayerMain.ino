@@ -37,8 +37,7 @@ bool paused = false;
 bool playerReady = false;
 
 volatile bool trackEnded = false;
-
-unsigned long trackStartMs = 0;
+volatile bool trackLoaded = false;
 
 //button edge detection
 bool lastButtonState = HIGH;
@@ -148,7 +147,7 @@ bool playTrack(int index) {
   if (index < 0 || index >= trackCount) return false;
   currentTrack = index;
   paused = false;
-  trackStartMs = millis();
+  trackLoaded = false;
 
   if (!audio.connecttoFS(SD, playlist[index])) {
     Serial.print("Failed to load: ");
@@ -161,6 +160,7 @@ bool playTrack(int index) {
     return false;
   }
 
+  trackLoaded = true;
   showTrackName();
   Serial.print("Playing: ");
   Serial.println(playlist[index]);
@@ -422,10 +422,11 @@ void loop() {
 }
 
 void audio_eof_mp3(const char *info) {
-  unsigned long now = millis();
-  if (now - trackStartMs < 2000) {
-    Serial.println("(ignoring spurious EOF)");
+  if (!trackLoaded) {
+    Serial.println("Ignoring EOF because no track is loaded");
     return;
   }
+
+  trackLoaded = false;
   trackEnded = true;
 }
