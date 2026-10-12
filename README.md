@@ -80,7 +80,9 @@ The sketch uses `Audio_nopsram.h`. Do not replace it with the current `Audio.h` 
 - Single press: pause/resume
 - Double press: skip to another random track
 - Hold for more than one second: open the menu without pausing playback
-- Press in the menu: return to music (release before another action)
+- In the menu: turn to highlight Return to Music or All Songs, then press to select
+- In All Songs: turn to browse, then press a song to play it and return to music
+- Select Back at the top of All Songs to return to the menu
 - Rotate the encoder: adjust volume on the music screen
 - Track ends: automatically plays another random track
 
@@ -90,6 +92,9 @@ The sketch uses `Audio_nopsram.h`. Do not replace it with the current `Audio.h` 
 - Release, then press to exit: the music screen should remain visible, even if you hold the exit press for more than one second.
 - Repeat entry and exit several times, then confirm single-click pause/resume and double-click skip still work.
 - Rotate in the menu, then exit: the volume should not jump.
+- Open All Songs and scroll across pages. Check the first and last songs play when selected.
+- Select Back to return to the menu, then Return to Music. Holding a selection press should not reopen the menu.
+- Let a song finish while browsing: the next song should play without replacing the song list.
 
 ## Troubleshooting
 

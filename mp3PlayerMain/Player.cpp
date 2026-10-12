@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "Display.h"
 #include "Player.h"
+#include "Controls.h"
 
 Audio audio;
 SPIClass sdSpi(HSPI);
@@ -155,6 +156,7 @@ void pauseResume() {
 }
 
 void showCurrentTrack() {
+  if (isMenuOpen()) return;
   if (currentTrack < 0 || currentTrack >= trackCount) return;
   showTrack(playlist[currentTrack], currentTrack, trackCount, paused, volume);
 }
@@ -169,6 +171,22 @@ void changeVolume(int amount) {
 
 int getVolume() {
   return volume;
+}
+
+int getTrackCount() {
+  return trackCount;
+}
+
+const char* getTrackPath(int index) {
+  if (index < 0 || index >= trackCount) return "";
+  return playlist[index];
+}
+
+void selectTrack(int index) {
+  if (index < 0 || index >= trackCount) return;
+  // A pending EOF from the previous song must not skip this selection.
+  trackEnded = false;
+  if (!playTrack(index)) tryAnotherTrack();
 }
 
 void audio_eof_mp3(const char *info) {

@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 #include "Display.h"
+#include "Player.h"
 
 TFT_eSPI tft = TFT_eSPI();
 
@@ -103,15 +104,60 @@ void showTrack(const char* path, int currentTrack, int trackCount, bool paused, 
   drawVolume(volume);
 }
 
-void showMenu() {
+void showMenu(int selection) {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   tft.setCursor(10, 10);
   tft.println("MENU");
-  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.setTextColor(selection == 0 ? TFT_YELLOW : TFT_WHITE, TFT_BLACK);
   tft.setCursor(10, 60);
   tft.println("Return to Music");
+  tft.setTextColor(selection == 1 ? TFT_YELLOW : TFT_WHITE, TFT_BLACK);
+  tft.setCursor(10, 90);
+  tft.println("All Songs");
+}
+
+void showSongList(int selection) {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setCursor(10, 10);
+  tft.println("ALL SONGS");
+
+  // Show six entries at a time, including Back at the start.
+  int first = (selection / 6) * 6;
+  int total = getTrackCount() + 1;
+  for (int row = 0; row < 6 && first + row < total; row++) {
+    int item = first + row;
+    tft.setTextColor(item == selection ? TFT_YELLOW : TFT_WHITE, TFT_BLACK);
+    tft.setCursor(10, 45 + row * 27);
+    if (item == 0) {
+      tft.println("< Back");
+    } else {
+      const char* path = getTrackPath(item - 1);
+      const char* slash = strrchr(path, '/');
+      const char* base = slash ? slash + 1 : path;
+      char name[80];
+      strncpy(name, base, sizeof(name) - 1);
+      name[sizeof(name) - 1] = '\0';
+      char* dot = strrchr(name, '.');
+      if (dot) *dot = '\0';
+      // Keep long names on one line.
+      if (strlen(name) > 24) strcpy(name + 21, "...");
+      tft.println(name);
+    }
+  }
+
+  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.setCursor(10, 220);
+  tft.print("Page ");
+  tft.print(selection / 6 + 1);
+  tft.print(" of ");
+  tft.println((total + 5) / 6);
+  tft.setCursor(10, 232);
+  tft.print("Turn to browse, press to select");
 }
 
 void drawVolume(int volume) {

@@ -2,3 +2,4 @@
 
 void setupControls();
 void updateControls();
+bool isMenuOpen();

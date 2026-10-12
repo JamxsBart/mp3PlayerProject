@@ -11,6 +11,9 @@ int clickCount = 0;
 unsigned long firstClickTime = 0;
 unsigned long buttonPressTime = 0;
 bool menuOpen = false;
+bool songListOpen = false;
+int menuSelection = 0;
+int songSelection = 0; // 0 is Back; songs start at 1.
 bool longPressHandled = false;
 
 volatile int encoderCounter = 0;
@@ -19,6 +22,16 @@ int lastEncoderCounter = 0;
 
 void checkEncoder();
 void IRAM_ATTR encoderISR();
+
+bool isMenuOpen() {
+  return menuOpen;
+}
+
+void resetEncoderPosition() {
+  noInterrupts();
+  lastEncoderCounter = encoderCounter;
+  interrupts();
+}
 
 void setupControls() {
   pinMode(encoderSwitch, INPUT_PULLUP);
@@ -34,14 +47,7 @@ void setupControls() {
 }
 
 void updateControls() {
-  if (!menuOpen) {
-    checkEncoder();
-  } else {
-    // Discard rotation in the menu instead of applying it on exit.
-    noInterrupts();
-    lastEncoderCounter = encoderCounter;
-    interrupts();
-  }
+  checkEncoder();
 
   bool buttonReading = digitalRead(encoderSwitch);
 
@@ -59,11 +65,27 @@ void updateControls() {
   if (button == LOW && lastButtonState == HIGH) {
     buttonPressTime = millis();
     if (menuOpen) {
-      menuOpen = false;
       clickCount = 0;
-      // Consume the exit press until release so it cannot reopen the menu.
+      // Consume each menu press until release, including page changes.
       longPressHandled = true;
-      showCurrentTrack();
+      resetEncoderPosition();
+      if (songListOpen) {
+        if (songSelection == 0) {
+          songListOpen = false;
+          showMenu(menuSelection);
+        } else {
+          menuOpen = false;
+          songListOpen = false;
+          selectTrack(songSelection - 1);
+        }
+      } else if (menuSelection == 0) {
+        menuOpen = false;
+        showCurrentTrack();
+      } else {
+        songListOpen = true;
+        songSelection = 0;
+        showSongList(songSelection);
+      }
       lastButtonState = button;
       return;
     }
@@ -73,7 +95,10 @@ void updateControls() {
   if (button == LOW && !longPressHandled && (millis() - buttonPressTime > 1000)) {
     longPressHandled = true;
     menuOpen = true;
-    showMenu();
+    songListOpen = false;
+    menuSelection = 0;
+    resetEncoderPosition();
+    showMenu(menuSelection);
     clickCount = 0;
   }
 
@@ -129,8 +154,24 @@ void checkEncoder() {
     int clicks = difference / 4;
 
     if (clicks != 0) {
-      changeVolume(clicks);
-      drawVolume(getVolume());
+      if (menuOpen) {
+        if (songListOpen) {
+          int next = constrain(songSelection + clicks, 0, getTrackCount());
+          if (next != songSelection) {
+            songSelection = next;
+            showSongList(songSelection);
+          }
+        } else {
+          int next = constrain(menuSelection + clicks, 0, 1);
+          if (next != menuSelection) {
+            menuSelection = next;
+            showMenu(menuSelection);
+          }
+        }
+      } else {
+        changeVolume(clicks);
+        drawVolume(getVolume());
+      }
 
       // Keep any unfinished encoder steps for the next check
       lastEncoderCounter += clicks * 4;
