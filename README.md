@@ -79,7 +79,17 @@ The sketch uses `Audio_nopsram.h`. Do not replace it with the current `Audio.h` 
 
 - Single press: pause/resume
 - Double press: skip to another random track
+- Hold for more than one second: open the menu without pausing playback
+- Press in the menu: return to music (release before another action)
+- Rotate the encoder: adjust volume on the music screen
 - Track ends: automatically plays another random track
+
+### Control regression checks on hardware
+
+- Hold to open the menu: playback should continue without a pause.
+- Release, then press to exit: the music screen should remain visible, even if you hold the exit press for more than one second.
+- Repeat entry and exit several times, then confirm single-click pause/resume and double-click skip still work.
+- Rotate in the menu, then exit: the volume should not jump.
 
 ## Troubleshooting
 

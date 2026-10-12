@@ -36,6 +36,11 @@ void setupControls() {
 void updateControls() {
   if (!menuOpen) {
     checkEncoder();
+  } else {
+    // Discard rotation in the menu instead of applying it on exit.
+    noInterrupts();
+    lastEncoderCounter = encoderCounter;
+    interrupts();
   }
 
   bool buttonReading = digitalRead(encoderSwitch);
@@ -52,18 +57,16 @@ void updateControls() {
   }
 
   if (button == LOW && lastButtonState == HIGH) {
+    buttonPressTime = millis();
     if (menuOpen) {
       menuOpen = false;
+      clickCount = 0;
+      // Consume the exit press until release so it cannot reopen the menu.
+      longPressHandled = true;
       showCurrentTrack();
       lastButtonState = button;
       return;
     }
-
-    buttonPressTime = millis();
-    if (clickCount == 0) firstClickTime = millis();
-    clickCount++;
-    Serial.print("Click: ");
-    Serial.println(clickCount);
   }
 
   // Long press detection after 1 second
@@ -77,13 +80,17 @@ void updateControls() {
   if (button == HIGH && lastButtonState == LOW) {
     if (longPressHandled) {
       longPressHandled = false;
+    } else if (!menuOpen) {
+      // Count short clicks on release; a hold must not pause playback first.
+      if (clickCount == 0) firstClickTime = millis();
+      clickCount++;
     }
   }
 
   lastButtonState = button;
 
   // Wait 400ms to see if there is another click
-  if (!menuOpen && !longPressHandled && clickCount > 0 && (millis() - firstClickTime) > 400) {
+  if (button == HIGH && !menuOpen && !longPressHandled && clickCount > 0 && (millis() - firstClickTime) > 400) {
     if (clickCount == 1) {
       pauseResume();
       Serial.println("Pause/Play");
